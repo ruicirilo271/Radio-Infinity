@@ -1,0 +1,21 @@
+INFINITY RADIO — VALIDAÇÃO DA VERSÃO VERCEL
+
+- Python compilado sem erros.
+- JavaScript validado com node --check.
+- vercel.json validado como JSON.
+- Página principal: 200.
+- Ficheiros public/: 200.
+- /api/status: 200.
+- /api/player/playlist: 200 com URLs assinadas.
+- /stream/<id>: 206 Partial Content com Content-Range correto.
+- /api/cover/<id>: 200 no teste de capa.
+- /radio: playlist M3U válida.
+- Assinatura inválida/expirada: 403.
+- Modo manual: validado.
+- Nenhuma chave privada incluída no projeto.
+
+Configuração /tmp:
+- Limite documentado considerado: 500 MB.
+- Teto interno de segurança: 450 MB.
+- Cache de áudio: 430 MB.
+- Resposta Range máxima: 3,75 MB.

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <defs>
+    <radialGradient id="bg" cx="28%" cy="18%" r="90%">
+      <stop offset="0" stop-color="#2030a8"/>
+      <stop offset=".45" stop-color="#0b1030"/>
+      <stop offset="1" stop-color="#03040b"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#70f4ff"/>
+      <stop offset=".5" stop-color="#6175ff"/>
+      <stop offset="1" stop-color="#c25dff"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="20" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="1200" rx="110" fill="url(#bg)"/>
+
+  <circle cx="600" cy="600" r="440" fill="none" stroke="#6ef3ff" stroke-opacity=".08" stroke-width="2"/>
+  <circle cx="600" cy="600" r="370" fill="none" stroke="#9d5cff" stroke-opacity=".12" stroke-width="2" stroke-dasharray="12 20"/>
+  <circle cx="600" cy="600" r="290" fill="#080b1c" stroke="url(#ring)" stroke-width="9" filter="url(#glow)"/>
+
+  <path d="M377 600c81-157 167-235 258-235 104 0 188 105 188 235S739 835 635 835c-91 0-177-78-258-235zm446 0c-81-157-167-235-258-235-104 0-188 105-188 235s84 235 188 235c91 0 177-78 258-235z"
+        fill="none" stroke="url(#ring)" stroke-width="42" stroke-linecap="round" filter="url(#glow)"/>
+
+  <text x="600" y="1010" text-anchor="middle" fill="#f5f7ff" font-family="Arial, sans-serif" font-size="73" font-weight="700" letter-spacing="18">INFINITY</text>
+  <text x="600" y="1075" text-anchor="middle" fill="#70f4ff" font-family="Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="22">RADIO</text>
+</svg>
