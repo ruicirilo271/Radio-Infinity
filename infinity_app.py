@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator
 
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context, url_for
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -58,7 +58,7 @@ app = Flask(
 app.url_map.strict_slashes = False
 
 APP_NAME = "Infinity Radio"
-APP_VERSION = "vercel-mse-2026.06.12.1"
+APP_VERSION = "vercel-prefetch-2026.06.12.3"
 TIMEZONE_NAME = "Europe/Lisbon"
 LISBON_TZ = ZoneInfo(TIMEZONE_NAME)
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -712,10 +712,9 @@ def public_track(track: dict[str, Any], ttl_seconds: int = SIGNED_URL_TTL_SECOND
         "artist": track["artist"],
         "title": track["title"],
         "size": size,
-        # `chunk` é usado pelo MediaSource no navegador. Cada pedido fica
-        # abaixo do limite de resposta da Vercel Function.
+        # O browser descarrega a faixa completa através de blocos pequenos e
+        # cria um Blob local antes de iniciar a reprodução.
         "chunk": url_for("audio_chunk", file_id=file_id, **audio_query),
-        # Mantemos `stream` para faixas pequenas, testes HEAD/Range e compatibilidade.
         "stream": url_for("stream_single", file_id=file_id, **audio_query),
         "cover": url_for("api_cover", file_id=file_id, **cover_query),
     }
@@ -783,7 +782,7 @@ def api_status():
                 "end": next_program["end"],
             },
             "stream_url": "/radio",
-            "audio_mode": "HTTP Range em blocos Vercel",
+            "audio_mode": "HTMLAudio nativo com pré-carregamento completo por blocos",
             "max_range_bytes": MAX_RANGE_BYTES,
         }
     )
@@ -815,6 +814,7 @@ def api_player_playlist():
                 "enabled": True,
                 "audio_limit_mb": round(TMP_AUDIO_MAX_BYTES / 1024 / 1024),
                 "range_mb": round(MAX_RANGE_BYTES / 1_000_000, 2),
+                "range_bytes": MAX_RANGE_BYTES,
             },
         }
     )
@@ -828,6 +828,15 @@ def api_schedule():
             for start, end, name, folder in SCHEDULE
         ]
     )
+
+
+@app.route("/__infinity_audio__/<file_id>", methods=["GET", "HEAD"])
+def virtual_audio_placeholder(file_id: str):
+    """Esta rota só é usada se o Service Worker ainda não controlar a página."""
+    return jsonify({
+        "error": "O proxy de áudio do navegador ainda não está ativo.",
+        "action": "Atualiza a página e volta a ligar a rádio.",
+    }), 428
 
 
 @app.route("/api/audio/chunk/<file_id>", methods=["GET", "HEAD"])
@@ -979,9 +988,14 @@ def api_cover(file_id: str):
 
 
 @app.route("/radio")
+def radio_web():
+    """No Vercel, abre o player web; não existe socket MP3 infinito."""
+    return redirect(url_for("index"), code=302)
+
+
 @app.route("/radio.m3u")
 def radio_playlist():
-    """Playlist M3U para VLC e outros leitores; não é um socket infinito."""
+    """Playlist experimental; o player web é o modo suportado no Vercel."""
     now = lisbon_now()
     program = requested_program(now)
 
@@ -1099,8 +1113,8 @@ def api_health():
             "range_response_mb": round(MAX_RANGE_BYTES / 1_000_000, 2),
             "ephemeral": True,
         },
-        "radio_route": "M3U playlist (não é um socket MP3 infinito)",
-        "web_player_mode": "MediaSource + blocos /tmp",
+        "radio_route": "/radio abre o player web; /radio.m3u é experimental",
+        "web_player_mode": "HTMLAudio nativo + faixa completa em Blob + próxima faixa pré-carregada",
         "audio_chunk_route": "/api/audio/chunk/<file_id>",
         "direct_continuous_stream_supported": False,
     }

@@ -1,176 +1,101 @@
-# ATUALIZAÇÃO IMPORTANTE — ÁUDIO CORRIGIDO
+# Infinity Radio — Vercel com reprodução estável
 
-Esta pasta usa MediaSource no navegador para juntar blocos inferiores ao limite do Vercel. Consulta `README_AUDIO_FIX.md`.
+Versão: `vercel-sw-range-2026.06.12.2`
 
-# Infinity Radio — versão preparada para Vercel
+## O que mudou
 
-Esta pasta é independente da versão localhost. Não substituas a versão local que já está estável.
+A versão anterior usava `MediaSource` para acrescentar os blocos MP3. Em alguns
+browsers, a música parava na passagem entre blocos.
 
-## O que foi adaptado
+Esta versão usa:
 
-- Flask executa através de `api/index.py` como uma Vercel Function.
-- Os ficheiros visuais estão em `public/`, para serem servidos pela CDN do Vercel.
-- O `service_account.json` não é publicado.
-- As credenciais Google são lidas de `GOOGLE_SERVICE_ACCOUNT_JSON`.
-- As músicas são servidas através de pedidos HTTP `Range`.
-- Cada resposta tem no máximo aproximadamente 3,75 MB, abaixo do limite de 4,5 MB das Functions.
-- Cada bloco de áudio é guardado temporariamente em `/tmp/infinity-radio/audio`.
-- O cache de áudio usa LRU e fica limitado a 430 MB, deixando margem dentro dos 500 MB de `/tmp`.
-- O modo manual e o histórico são guardados no `localStorage` do navegador.
-- As URLs de áudio e capas são assinadas e expiram.
+1. `<audio>` nativo do navegador;
+2. um Service Worker em `/sw.js`;
+3. pedidos HTTP Range virtuais;
+4. blocos reais de até 3,75 MB servidos pelo Vercel;
+5. cache LRU em `/tmp/infinity-radio`.
 
-## Limitação importante
-
-O Vercel não consegue manter uma ligação MP3 infinita. A função tem duração máxima e armazenamento temporário.
-
-Por isso:
-
-- o player do site funciona faixa a faixa e pode tocar continuamente;
-- `/radio` e `/radio.m3u` devolvem uma playlist M3U para VLC e leitores compatíveis;
-- `/radio` não é um único socket MP3 24/7 como a versão localhost.
+O Service Worker apresenta ao `<audio>` um único ficheiro MP3 contínuo e, por
+baixo, descarrega os blocos pequenos. O título, capa e próxima música continuam
+sincronizados faixa a faixa.
 
 ## Estrutura
 
 ```text
-Infinity_Radio_Vercel/
-├── api/
-│   └── index.py
-├── public/
-│   ├── style.css
-│   ├── script.js
-│   └── infinity-cover.svg
-├── templates/
-│   └── index.html
-├── app.py                 # arranque local
-├── infinity_app.py        # aplicação Flask usada pelo Vercel
-├── requirements.txt
-├── vercel.json
-├── .python-version
-├── .gitignore
-├── .vercelignore
-└── .env.example
+app.py
+infinity_app.py
+requirements.txt
+vercel.json
+.python-version
+templates/
+    index.html
+public/
+    script.js
+    sw.js
+    style.css
+    infinity-cover.svg
 ```
 
-## 1. Revogar a chave antiga
+Não deixes uma pasta `api/` antiga no repositório.
 
-A chave privada anteriormente partilhada ficou exposta. Antes de publicar:
+## Variáveis no Vercel
 
-1. Abre o Google Cloud Console.
-2. Entra em **IAM e administração → Contas de serviço**.
-3. Abre a conta utilizada pela Infinity Radio.
-4. Elimina a chave antiga.
-5. Cria uma nova chave JSON.
-6. Confirma que as pastas do Google Drive continuam partilhadas com o email da conta de serviço.
-
-Nunca coloques `service_account.json` no GitHub.
-
-## 2. Transformar o JSON numa única linha
-
-Na pasta onde tens a nova chave:
-
-```powershell
-python -c "import json; print(json.dumps(json.load(open('service_account.json', encoding='utf-8'))))"
-```
-
-Copia todo o resultado.
-
-## 3. Criar o projeto no GitHub
-
-Envia todos os ficheiros desta pasta, exceto:
-
-```text
-service_account.json
-.env
-.venv
-__pycache__
-```
-
-## 4. Importar no Vercel
-
-1. Entra no Vercel.
-2. Seleciona **Add New → Project**.
-3. Importa o repositório da Infinity Radio.
-4. Não definas Build Command, Output Directory ou Install Command personalizados.
-5. Mantém Fluid Compute ativado.
-
-## 5. Variáveis de ambiente
-
-Em **Project → Settings → Environment Variables**, adiciona:
-
-### Obrigatória
+Obrigatórias:
 
 ```text
 GOOGLE_SERVICE_ACCOUNT_JSON
-```
-
-Valor: o JSON completo numa única linha.
-
-### Recomendada
-
-```text
 STREAM_SIGNING_KEY
 ```
 
-Gera um segredo no PowerShell:
+`GOOGLE_SERVICE_ACCOUNT_JSON` deve conter o JSON completo da conta de serviço
+numa única linha. `STREAM_SIGNING_KEY` deve ser um segredo aleatório longo.
 
-```powershell
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+## Publicar
 
-Adiciona as variáveis a Production, Preview e Development, conforme necessário.
+1. Substitui todos os ficheiros do repositório pelos desta pasta.
+2. Confirma que `app.py` está na raiz escolhida pelo Vercel.
+3. Faz `Redeploy` sem reutilizar a Build Cache.
+4. Abre a aplicação.
+5. Elimina o Service Worker antigo conforme indicado abaixo.
+6. Atualiza com `Ctrl + Shift + R`.
+7. Clica em **LIGAR RÁDIO**.
 
-## 6. Publicar
+## Limpar o Service Worker antigo
 
-No Vercel, carrega em **Deploy**. Depois testa:
+No Chrome ou Edge:
+
+1. Prime `F12`.
+2. Abre **Application**.
+3. Entra em **Service Workers**.
+4. Clica em **Unregister** nos workers da Infinity Radio.
+5. Em **Storage**, clica em **Clear site data**.
+6. Fecha as ferramentas e atualiza com `Ctrl + Shift + R`.
+
+Também podes testar numa janela anónima depois do novo deployment.
+
+## Diagnósticos
 
 ```text
-https://TEU-PROJETO.vercel.app/
-https://TEU-PROJETO.vercel.app/api/health
-https://TEU-PROJETO.vercel.app/radio
+/api/health
+/api/health/audio
+/sw.js
 ```
 
-Em `/api/health` deves ver:
+O `/api/health` novo deve mostrar:
 
 ```json
 {
-  "ok": true,
-  "credentials_ready": true,
-  "tmp": {
-    "audio_limit_mb": 430,
-    "range_response_mb": 3.75,
-    "ephemeral": true
-  }
+  "version": "vercel-sw-range-2026.06.12.2",
+  "web_player_mode": "HTMLAudio nativo + Service Worker Range + blocos /tmp"
 }
 ```
 
-## Como funciona o `/tmp`
+## Sobre `/radio`
 
-O cache é apenas uma otimização:
+No Vercel, `/radio` e `/radio.m3u` são playlists M3U. Não são um socket MP3
+infinito como a rota `/radio` da versão localhost. Uma Vercel Function não pode
+manter uma emissão HTTP aberta indefinidamente e cada resposta tem limite de
+tamanho.
 
-- cada instância do Vercel tem o seu próprio `/tmp`;
-- o conteúdo pode desaparecer quando a instância é encerrada;
-- uma nova instância volta a descarregar os blocos necessários;
-- a aplicação nunca depende do cache para funcionar;
-- os blocos mais antigos são apagados automaticamente quando o limite é atingido.
-
-## Teste local desta versão
-
-Podes testar antes de publicar colocando temporariamente uma nova chave em `service_account.json`:
-
-```powershell
-py -m pip install -r requirements.txt
-py app.py
-```
-
-Depois abre:
-
-```text
-http://127.0.0.1:5000
-```
-
-Também podes testar com a CLI do Vercel:
-
-```powershell
-npm install -g vercel
-vercel dev
-```
+O modo recomendado no Vercel é o player da página principal. Para um URL MP3
+24/7 real, é necessário Icecast/Liquidsoap num servidor persistente.

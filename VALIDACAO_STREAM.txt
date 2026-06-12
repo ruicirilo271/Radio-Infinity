@@ -1,0 +1,21 @@
+Infinity Radio — validação da correção de stream
+Versão: vercel-sw-range-2026.06.12.2
+
+PASSOU:
+- Compilação Python de app.py e infinity_app.py
+- Sintaxe JavaScript de public/script.js
+- Sintaxe JavaScript de public/sw.js
+- JSON válido em vercel.json
+- Range 0-1: 2 bytes corretos
+- Range aberto 0-: ficheiro completo correto
+- Range atravessando a fronteira 3,75 MB: bytes corretos
+- Suffix Range -1000: 1000 bytes corretos
+- HEAD Range: 206 e Content-Length correto
+- Montagem integral de ficheiro de 8.000.000 bytes
+- Passagem automática por três pedidos de blocos consecutivos
+- Comparação byte a byte da saída montada: idêntica ao original
+
+ERRO CORRIGIDO:
+O ReadableStream regressava quando o leitor de um bloco terminava. Alguns
+browsers não chamavam pull novamente, deixando a música parada na fronteira.
+Agora o mesmo pull abre imediatamente o bloco seguinte.
