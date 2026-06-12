@@ -54,6 +54,9 @@ app = Flask(
     static_url_path="",
 )
 
+# Aceita /radio e /radio/ sem devolver 404 por causa da barra final.
+app.url_map.strict_slashes = False
+
 APP_NAME = "Infinity Radio"
 TIMEZONE_NAME = "Europe/Lisbon"
 LISBON_TZ = ZoneInfo(TIMEZONE_NAME)

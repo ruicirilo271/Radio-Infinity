@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Arranque local da versão Vercel da Infinity Radio."""
+"""Entrada única da Infinity Radio no Vercel e arranque local."""
 
 import os
 
-from infinity_app import TMP_ROOT, app as application
+# O Vercel procura obrigatoriamente uma aplicação WSGI de topo chamada `app`.
+from infinity_app import TMP_ROOT, app
+
+__all__ = ["app"]
 
 
 if __name__ == "__main__":
@@ -15,7 +18,7 @@ if __name__ == "__main__":
     print(f"  Cache tmp: {TMP_ROOT}")
     print("=" * 72)
 
-    application.run(
+    app.run(
         host="0.0.0.0",
         port=int(os.getenv("PORT", "5000")),
         debug=False,

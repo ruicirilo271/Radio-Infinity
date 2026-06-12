@@ -1,35 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
   "fluid": true,
   "functions": {
-    "api/index.py": {
+    "app.py": {
       "maxDuration": 300,
       "excludeFiles": "{service_account.json,__pycache__/**,**/*.pyc,*.zip,public/**,.git/**,.venv/**,venv/**}"
     }
   },
-  "rewrites": [
-    {
-      "source": "/",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/api/:path*",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/stream/:path*",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/radio",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/radio.m3u",
-      "destination": "/api/index"
-    }
-  ],
   "headers": [
     {
       "source": "/style.css",
