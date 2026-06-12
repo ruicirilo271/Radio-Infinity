@@ -1,3 +1,7 @@
+# ATUALIZAÇÃO IMPORTANTE — ÁUDIO CORRIGIDO
+
+Esta pasta usa MediaSource no navegador para juntar blocos inferiores ao limite do Vercel. Consulta `README_AUDIO_FIX.md`.
+
 # Infinity Radio — versão preparada para Vercel
 
 Esta pasta é independente da versão localhost. Não substituas a versão local que já está estável.

@@ -1,0 +1,15 @@
+Infinity Radio Vercel — validação da correção de áudio
+
+Versão: vercel-mse-2026.06.12.1
+
+[OK] infinity_app.py compilado com py_compile
+[OK] public/script.js validado com node --check
+[OK] vercel.json é JSON válido
+[OK] /api/player/playlist devolve URL chunk assinada
+[OK] /api/audio/chunk/<id>?offset=0 devolve HTTP 200
+[OK] Content-Length coincide com os bytes realmente devolvidos
+[OK] X-Infinity-Next-Offset aponta para o bloco seguinte
+[OK] Segundo bloco corresponde ao offset pedido
+[OK] /radio gera playlist com URLs de blocos inferiores ao limite
+[OK] /api/health inclui versão e modo MediaSource
+[OK] service_account.json não incluído

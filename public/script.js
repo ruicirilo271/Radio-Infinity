@@ -153,6 +153,15 @@
     let sourceNode = null;
     let frequencyData = null;
 
+    // O Vercel não pode devolver um MP3 grande numa única resposta. O browser
+    // monta a faixa a partir de blocos pequenos através da MediaSource API.
+    let mediaSource = null;
+    let mediaSourceBuffer = null;
+    let mediaObjectUrl = null;
+    let mediaAbortController = null;
+    let playbackGeneration = 0;
+    let intentionalSourceChange = false;
+
     function queryString(includeCacheBuster = true) {
         const params = new URLSearchParams();
 
@@ -223,6 +232,220 @@
         sourceNode.connect(analyser);
         analyser.connect(audioContext.destination);
         frequencyData = new Uint8Array(analyser.frequencyBinCount);
+    }
+
+    function eventOnce(target, eventName) {
+        return new Promise((resolve, reject) => {
+            const onEvent = event => {
+                cleanup();
+                resolve(event);
+            };
+            const onError = event => {
+                cleanup();
+                reject(event instanceof Error ? event : new Error(`Falha no evento ${eventName}.`));
+            };
+            const cleanup = () => {
+                target.removeEventListener(eventName, onEvent);
+                target.removeEventListener("error", onError);
+            };
+            target.addEventListener(eventName, onEvent, { once: true });
+            target.addEventListener("error", onError, { once: true });
+        });
+    }
+
+    function mseMimeType() {
+        if (!window.MediaSource) return null;
+        const candidates = [
+            'audio/mpeg',
+            'audio/mpeg; codecs="mp3"',
+        ];
+        return candidates.find(type => MediaSource.isTypeSupported(type)) || null;
+    }
+
+    function cleanupMediaPipeline({ clearAudio = true } = {}) {
+        playbackGeneration += 1;
+
+        if (mediaAbortController) {
+            mediaAbortController.abort();
+            mediaAbortController = null;
+        }
+
+        if (mediaSourceBuffer && mediaSourceBuffer.updating) {
+            try { mediaSourceBuffer.abort(); } catch (_error) { /* já terminou */ }
+        }
+
+        if (mediaSource && mediaSource.readyState === "open") {
+            try { mediaSource.endOfStream(); } catch (_error) { /* já terminou */ }
+        }
+
+        mediaSourceBuffer = null;
+        mediaSource = null;
+
+        if (mediaObjectUrl) {
+            URL.revokeObjectURL(mediaObjectUrl);
+            mediaObjectUrl = null;
+        }
+
+        if (clearAudio) {
+            audio.pause();
+            audio.removeAttribute("src");
+            audio.load();
+        }
+    }
+
+    function appendBuffer(buffer, generation) {
+        return new Promise((resolve, reject) => {
+            if (generation !== playbackGeneration || !mediaSourceBuffer) {
+                reject(new DOMException("Reprodução substituída.", "AbortError"));
+                return;
+            }
+
+            const onUpdate = () => {
+                cleanup();
+                resolve();
+            };
+            const onError = () => {
+                cleanup();
+                reject(new Error("O navegador não conseguiu montar o bloco MP3."));
+            };
+            const cleanup = () => {
+                mediaSourceBuffer?.removeEventListener("updateend", onUpdate);
+                mediaSourceBuffer?.removeEventListener("error", onError);
+            };
+
+            mediaSourceBuffer.addEventListener("updateend", onUpdate, { once: true });
+            mediaSourceBuffer.addEventListener("error", onError, { once: true });
+
+            try {
+                mediaSourceBuffer.appendBuffer(buffer);
+            } catch (error) {
+                cleanup();
+                reject(error);
+            }
+        });
+    }
+
+    function bufferedAheadSeconds() {
+        if (!audio.buffered || audio.buffered.length === 0) return 0;
+        try {
+            return Math.max(0, audio.buffered.end(audio.buffered.length - 1) - audio.currentTime);
+        } catch (_error) {
+            return 0;
+        }
+    }
+
+    async function waitForBufferRoom(generation, signal) {
+        // Não descarregar programas longos inteiros para a memória do browser.
+        while (generation === playbackGeneration && !signal.aborted && bufferedAheadSeconds() > 120) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+
+    function chunkUrl(track, offset) {
+        const separator = track.chunk.includes("?") ? "&" : "?";
+        return `${track.chunk}${separator}offset=${offset}&v=${Date.now()}`;
+    }
+
+    async function fetchChunk(track, offset, signal, attempts = 3) {
+        let lastError = null;
+
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+                const response = await fetch(chunkUrl(track, offset), {
+                    cache: "no-store",
+                    signal,
+                });
+                const payload = response.ok ? await response.arrayBuffer() : null;
+
+                if (!response.ok || !payload || payload.byteLength === 0) {
+                    const detail = await response?.text?.().catch(() => "");
+                    throw new Error(detail || `Bloco de áudio HTTP ${response.status}.`);
+                }
+
+                const headerNext = Number(response.headers.get("X-Infinity-Next-Offset"));
+                const nextOffset = Number.isFinite(headerNext)
+                    ? headerNext
+                    : offset + payload.byteLength;
+
+                return { payload, nextOffset };
+            } catch (error) {
+                if (signal.aborted) throw error;
+                lastError = error;
+                await new Promise(resolve => setTimeout(resolve, 700 * attempt));
+            }
+        }
+
+        throw lastError || new Error("Não foi possível carregar o bloco de áudio.");
+    }
+
+    async function pumpRemainingChunks(track, offset, generation, signal) {
+        let nextOffset = offset;
+
+        try {
+            while (
+                generation === playbackGeneration &&
+                !signal.aborted &&
+                nextOffset >= 0 &&
+                nextOffset < Number(track.size)
+            ) {
+                await waitForBufferRoom(generation, signal);
+                const chunk = await fetchChunk(track, nextOffset, signal);
+
+                if (generation !== playbackGeneration || signal.aborted) return;
+                await appendBuffer(chunk.payload, generation);
+                nextOffset = chunk.nextOffset;
+            }
+
+            if (
+                generation === playbackGeneration &&
+                !signal.aborted &&
+                mediaSource?.readyState === "open" &&
+                mediaSourceBuffer &&
+                !mediaSourceBuffer.updating
+            ) {
+                mediaSource.endOfStream();
+            }
+        } catch (error) {
+            if (signal.aborted || generation !== playbackGeneration) return;
+            console.error("Falha ao montar a faixa:", error);
+            setConnection("error", "Falha num bloco — a recuperar…");
+            retryOrSkip();
+        }
+    }
+
+    async function playTrackWithMediaSource(track) {
+        const mime = mseMimeType();
+        if (!mime) {
+            throw new Error("O navegador não suporta a montagem segura de MP3 necessária no Vercel.");
+        }
+
+        intentionalSourceChange = true;
+        cleanupMediaPipeline({ clearAudio: true });
+        const generation = playbackGeneration;
+        mediaAbortController = new AbortController();
+        const signal = mediaAbortController.signal;
+
+        mediaSource = new MediaSource();
+        const sourceOpen = eventOnce(mediaSource, "sourceopen");
+        mediaObjectUrl = URL.createObjectURL(mediaSource);
+        audio.src = mediaObjectUrl;
+        audio.load();
+
+        await sourceOpen;
+        if (generation !== playbackGeneration || signal.aborted) {
+            throw new DOMException("Reprodução substituída.", "AbortError");
+        }
+
+        mediaSourceBuffer = mediaSource.addSourceBuffer(mime);
+        const first = await fetchChunk(track, 0, signal);
+        await appendBuffer(first.payload, generation);
+
+        // O primeiro bloco já contém áudio suficiente para começar. Os restantes
+        // são carregados em paralelo, com um máximo de ~2 minutos em buffer.
+        const playPromise = audio.play();
+        void pumpRemainingChunks(track, first.nextOffset, generation, signal);
+        await playPromise;
+        intentionalSourceChange = false;
     }
 
     function roundedRect(context, x, y, width, height, radius) {
@@ -409,12 +632,13 @@
         clearTimeout(reconnectTimer);
         const track = playlist[trackIndex];
         pendingTrack = track;
-        setConnection("connecting", "A carregar um bloco seguro do áudio…");
+        setConnection("connecting", "A montar os blocos do áudio no navegador…");
 
-        audio.pause();
-        audio.src = withCacheBuster(track.stream);
-        audio.load();
-        await audio.play();
+        try {
+            await playTrackWithMediaSource(track);
+        } finally {
+            intentionalSourceChange = false;
+        }
     }
 
     async function startRadio() {
@@ -452,9 +676,9 @@
     function stopRadio() {
         shouldPlay = false;
         clearTimeout(reconnectTimer);
-        audio.pause();
-        audio.removeAttribute("src");
-        audio.load();
+        intentionalSourceChange = true;
+        cleanupMediaPipeline({ clearAudio: true });
+        intentionalSourceChange = false;
         pendingTrack = null;
         powerBtn.classList.remove("active");
         powerBtn.querySelector(".power-icon").textContent = "▶";
@@ -498,7 +722,7 @@
             if (!response.ok) throw new Error(status.error || `HTTP ${response.status}`);
 
             serverStatus.textContent = "Vercel online";
-            qualityStatus.textContent = "MP3 Range + /tmp";
+            qualityStatus.textContent = "MP3 MSE + /tmp";
             lisbonClock.textContent = formatClock(status.server_time);
             nextProgram.textContent = status.next_program
                 ? `${status.next_program.start} — ${status.next_program.name}`
@@ -555,7 +779,7 @@
     audio.addEventListener("playing", () => {
         clearTimeout(reconnectTimer);
         retryCount = 0;
-        setConnection("online", "Música sincronizada — blocos seguros do Vercel");
+        setConnection("online", "Música sincronizada — blocos montados no navegador");
 
         if (pendingTrack) {
             showCurrentTrack(pendingTrack);
@@ -571,8 +795,12 @@
         if (shouldPlay) setConnection("connecting", "A carregar o próximo bloco…");
     });
 
-    audio.addEventListener("stalled", retryOrSkip);
-    audio.addEventListener("error", retryOrSkip);
+    audio.addEventListener("stalled", () => {
+        if (!intentionalSourceChange) retryOrSkip();
+    });
+    audio.addEventListener("error", () => {
+        if (!intentionalSourceChange) retryOrSkip();
+    });
 
     autoModeBtn.addEventListener("click", async () => {
         try {
@@ -607,6 +835,7 @@
 
     window.addEventListener("beforeunload", () => {
         saveLocalState();
+        cleanupMediaPipeline({ clearAudio: false });
         if (currentCoverUrl) URL.revokeObjectURL(currentCoverUrl);
     });
 

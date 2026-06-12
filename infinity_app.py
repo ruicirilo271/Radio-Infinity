@@ -58,6 +58,7 @@ app = Flask(
 app.url_map.strict_slashes = False
 
 APP_NAME = "Infinity Radio"
+APP_VERSION = "vercel-mse-2026.06.12.1"
 TIMEZONE_NAME = "Europe/Lisbon"
 LISBON_TZ = ZoneInfo(TIMEZONE_NAME)
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -711,6 +712,10 @@ def public_track(track: dict[str, Any], ttl_seconds: int = SIGNED_URL_TTL_SECOND
         "artist": track["artist"],
         "title": track["title"],
         "size": size,
+        # `chunk` é usado pelo MediaSource no navegador. Cada pedido fica
+        # abaixo do limite de resposta da Vercel Function.
+        "chunk": url_for("audio_chunk", file_id=file_id, **audio_query),
+        # Mantemos `stream` para faixas pequenas, testes HEAD/Range e compatibilidade.
         "stream": url_for("stream_single", file_id=file_id, **audio_query),
         "cover": url_for("api_cover", file_id=file_id, **cover_query),
     }
@@ -767,6 +772,7 @@ def api_status():
         {
             "ok": True,
             "app": APP_NAME,
+            "version": APP_VERSION,
             "platform": "vercel",
             "server_time": now.isoformat(),
             "mode": program["mode"],
@@ -824,6 +830,68 @@ def api_schedule():
     )
 
 
+@app.route("/api/audio/chunk/<file_id>", methods=["GET", "HEAD"])
+@app.route("/audio/chunk/<file_id>", methods=["GET", "HEAD"])
+def audio_chunk(file_id: str):
+    """Entrega um bloco independente de até MAX_RANGE_BYTES.
+
+    O navegador junta estes blocos com MediaSource. Ao contrário da rota
+    Range, cada resposta é um recurso completo e nunca anuncia um corpo
+    maior do que aquele que realmente devolve.
+    """
+    if not VALID_FILE_ID.fullmatch(file_id):
+        return jsonify({"error": "ID inválido."}), 400
+
+    try:
+        total_size = int(request.args.get("size", "0"))
+        expires = int(request.args.get("exp", "0"))
+        signature = request.args.get("sig", "")
+        offset = int(request.args.get("offset", "0"))
+    except ValueError:
+        return jsonify({"error": "Parâmetros inválidos."}), 400
+
+    if total_size <= 0 or not verify_signature("audio", file_id, total_size, expires, signature):
+        return jsonify({"error": "URL de áudio expirada ou inválida."}), 403
+
+    if offset < 0 or offset >= total_size:
+        return jsonify({"error": "Offset fora do ficheiro."}), 416
+
+    end = min(total_size - 1, offset + MAX_RANGE_BYTES - 1)
+    length = end - offset + 1
+    next_offset = end + 1 if end + 1 < total_size else -1
+
+    headers = {
+        "Content-Length": str(length),
+        "Cache-Control": "private, max-age=3600",
+        "Content-Encoding": "identity",
+        "ETag": f'W/"{file_id}-{total_size}-{offset}-{end}"',
+        "X-Infinity-Chunk-Start": str(offset),
+        "X-Infinity-Chunk-End": str(end),
+        "X-Infinity-File-Size": str(total_size),
+        "X-Infinity-Next-Offset": str(next_offset),
+        "X-Infinity-Cache": "tmp",
+    }
+
+    if request.method == "HEAD":
+        return Response(status=200, headers=headers, mimetype="audio/mpeg")
+
+    try:
+        cache_file = download_audio_range(file_id, offset, end)
+    except Exception as exc:
+        app.logger.exception("Erro ao obter bloco de áudio MSE: %s", exc)
+        return jsonify({"error": "Não foi possível carregar este bloco de áudio."}), 502
+
+    response = Response(
+        stream_with_context(iter_file(cache_file)),
+        status=200,
+        mimetype="audio/mpeg",
+        direct_passthrough=True,
+    )
+    for key, value in headers.items():
+        response.headers[key] = value
+    return response
+
+
 @app.route("/stream/<file_id>", methods=["GET", "HEAD"])
 def stream_single(file_id: str):
     if not VALID_FILE_ID.fullmatch(file_id):
@@ -855,7 +923,8 @@ def stream_single(file_id: str):
         "Content-Length": str(length),
         "Cache-Control": "private, max-age=3600",
         "Vary": "Range",
-        "ETag": f'W/"{file_id}-{start}-{end}-{total_size}"',
+        "Content-Encoding": "identity",
+        "ETag": f'W/"{file_id}-{total_size}"',
         "X-Infinity-Cache": "tmp",
     }
 
@@ -925,22 +994,75 @@ def radio_playlist():
     random.SystemRandom().shuffle(tracks)
     lines = ["#EXTM3U", f"#PLAYLIST:{APP_NAME} — {program['name']}"]
 
+    # A playlist externa também usa blocos completos inferiores a 4,5 MB.
+    # Alguns leitores, como o VLC, conseguem avançar por estas partes. Pode
+    # existir uma pausa mínima entre blocos; o player web é o modo recomendado.
+    item_count = 0
     for track in tracks[:250]:
         size = int(track["size"])
         query = signed_query("audio", track["id"], size, M3U_SIGNED_URL_TTL_SECONDS)
-        stream_url = url_for(
-            "stream_single",
-            file_id=track["id"],
-            _external=True,
-            **query,
-        )
-        lines.append(f"#EXTINF:-1,{track['artist']} - {track['title']}")
-        lines.append(stream_url)
+        part_total = max(1, (size + MAX_RANGE_BYTES - 1) // MAX_RANGE_BYTES)
+
+        for part_index, offset in enumerate(range(0, size, MAX_RANGE_BYTES), start=1):
+            chunk_url = url_for(
+                "audio_chunk",
+                file_id=track["id"],
+                offset=offset,
+                _external=True,
+                **query,
+            )
+            suffix = "" if part_total == 1 else f" · parte {part_index}/{part_total}"
+            lines.append(f"#EXTINF:-1,{track['artist']} - {track['title']}{suffix}")
+            lines.append(chunk_url)
+            item_count += 1
+            if item_count >= 1000:
+                break
+        if item_count >= 1000:
+            break
 
     response = Response("\n".join(lines) + "\n", mimetype="audio/x-mpegurl")
     response.headers["Content-Disposition"] = 'inline; filename="infinity-radio.m3u"'
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.route("/api/health/audio")
+def api_health_audio():
+    """Diagnóstico real: lista a pasta e descarrega os primeiros 64 KB."""
+    now = lisbon_now()
+    program = requested_program(now)
+
+    try:
+        tracks = LIBRARY.list_tracks(program["folder"])
+        if not tracks:
+            return jsonify({"ok": False, "error": "A pasta atual não contém MP3."}), 404
+
+        track = tracks[0]
+        end = min(int(track["size"]) - 1, 65535)
+        cache_file = download_audio_range(track["id"], 0, end)
+        sample = cache_file.read_bytes()[:16]
+        looks_like_mp3 = sample.startswith(b"ID3") or any(
+            sample[index:index + 2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
+            for index in range(max(0, len(sample) - 1))
+        )
+
+        return jsonify({
+            "ok": True,
+            "program": program["name"],
+            "folder": program["folder"],
+            "tracks_found": len(tracks),
+            "test_track": {
+                "id": track["id"],
+                "artist": track["artist"],
+                "title": track["title"],
+                "size": int(track["size"]),
+            },
+            "sample_bytes": cache_file.stat().st_size,
+            "sample_looks_like_mp3": looks_like_mp3,
+        })
+    except Exception as exc:
+        app.logger.exception("Diagnóstico de áudio falhou: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 502
 
 
 @app.route("/api/health")
@@ -960,6 +1082,7 @@ def api_health():
     payload = {
         "ok": credentials_ready,
         "app": APP_NAME,
+        "version": APP_VERSION,
         "platform": "vercel" if os.getenv("VERCEL") else "local/vercel-dev",
         "credentials_ready": credentials_ready,
         "credentials_source": _CREDENTIALS_SOURCE if credentials_ready else None,
@@ -976,7 +1099,10 @@ def api_health():
             "range_response_mb": round(MAX_RANGE_BYTES / 1_000_000, 2),
             "ephemeral": True,
         },
-        "radio_route": "M3U playlist",
+        "radio_route": "M3U playlist (não é um socket MP3 infinito)",
+        "web_player_mode": "MediaSource + blocos /tmp",
+        "audio_chunk_route": "/api/audio/chunk/<file_id>",
+        "direct_continuous_stream_supported": False,
     }
     return jsonify(payload), (200 if credentials_ready else 503)
 
