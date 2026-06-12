@@ -99,3 +99,10 @@ tamanho.
 
 O modo recomendado no Vercel é o player da página principal. Para um URL MP3
 24/7 real, é necessário Icecast/Liquidsoap num servidor persistente.
+
+
+## Rotas desta versão
+
+- `/` — página visual
+- `/radio` — playlist M3U
+- `/radio.m3u` — alias da playlist M3U

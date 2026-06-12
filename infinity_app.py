@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator
 
-from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context, url_for
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context, url_for
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -58,7 +58,7 @@ app = Flask(
 app.url_map.strict_slashes = False
 
 APP_NAME = "Infinity Radio"
-APP_VERSION = "vercel-prefetch-2026.06.12.3"
+APP_VERSION = "vercel-radio-route-2026.06.12.4"
 TIMEZONE_NAME = "Europe/Lisbon"
 LISBON_TZ = ZoneInfo(TIMEZONE_NAME)
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -988,14 +988,14 @@ def api_cover(file_id: str):
 
 
 @app.route("/radio")
-def radio_web():
-    """No Vercel, abre o player web; não existe socket MP3 infinito."""
-    return redirect(url_for("index"), code=302)
-
-
 @app.route("/radio.m3u")
 def radio_playlist():
-    """Playlist experimental; o player web é o modo suportado no Vercel."""
+    """Devolve a playlist M3U da emissão atual.
+
+    No Vercel esta rota não é um socket MP3 infinito. É uma playlist que
+    aponta para partes de áudio pequenas, compatíveis com o limite da Function.
+    A página visual continua exclusivamente na rota "/".
+    """
     now = lisbon_now()
     program = requested_program(now)
 
@@ -1113,7 +1113,7 @@ def api_health():
             "range_response_mb": round(MAX_RANGE_BYTES / 1_000_000, 2),
             "ephemeral": True,
         },
-        "radio_route": "/radio abre o player web; /radio.m3u é experimental",
+        "radio_route": "/radio e /radio.m3u devolvem uma playlist M3U",
         "web_player_mode": "HTMLAudio nativo + faixa completa em Blob + próxima faixa pré-carregada",
         "audio_chunk_route": "/api/audio/chunk/<file_id>",
         "direct_continuous_stream_supported": False,
