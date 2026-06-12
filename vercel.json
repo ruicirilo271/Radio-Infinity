@@ -1,12 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "fluid": true,
-  "functions": {
-    "app.py": {
-      "maxDuration": 300,
-      "excludeFiles": "{service_account.json,__pycache__/**,**/*.pyc,*.zip,public/**,.git/**,.venv/**,venv/**}"
-    }
-  },
   "headers": [
     {
       "source": "/style.css",
